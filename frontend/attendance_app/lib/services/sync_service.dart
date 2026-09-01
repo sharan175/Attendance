@@ -42,7 +42,7 @@ class SyncService {
 
     return await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute('''
@@ -77,6 +77,16 @@ class SyncService {
             // Ignore if column already exists
           }
         }
+        if (oldVersion < 5) {
+          try {
+            await db.execute(
+                'ALTER TABLE offline_qr_queue ADD COLUMN qr_token TEXT');
+            await db.execute(
+                'ALTER TABLE offline_qr_queue ADD COLUMN captcha TEXT');
+          } catch (e) {
+            // Ignore if column already exists
+          }
+        }
       },
       onCreate: (db, version) async {
         await db.execute('''
@@ -105,6 +115,8 @@ class SyncService {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
             timestamp TEXT NOT NULL,
+            qr_token TEXT,
+            captcha TEXT,
             status TEXT DEFAULT 'pending'
           )
         ''');
@@ -425,6 +437,8 @@ class SyncService {
           final id = record['id'];
           final sessionId = record['session_id'] as String;
           final timestamp = record['timestamp'] as String;
+          final qrToken = record['qr_token'] as String?;
+          final captcha = record['captcha'] as String?;
 
           // Check 24-hour expiration
           final scanTime = DateTime.parse(timestamp);
@@ -444,6 +458,8 @@ class SyncService {
           try {
             final result = await _attendanceService.markAttendance(
               sessionId,
+              qrToken: qrToken,
+              captcha: captcha,
               isOfflineSync: true,
               timestamp: timestamp,
             );
@@ -480,11 +496,13 @@ class SyncService {
     }
   }
 
-  Future<void> enqueueQRScan(String sessionId, String timestamp) async {
+  Future<void> enqueueQRScan(String sessionId, String timestamp, {String? qrToken, String? captcha}) async {
     final item = {
       'id': DateTime.now().millisecondsSinceEpoch,
       'session_id': sessionId,
       'timestamp': timestamp,
+      'qr_token': qrToken,
+      'captcha': captcha,
       'status': 'pending',
     };
 

@@ -414,6 +414,7 @@ def create_session(request):
     duration_minutes = serializer.validated_data['duration_minutes']
     class_type = serializer.validated_data.get('class_type', 'qr')
     start_time = serializer.validated_data.get('start_time') or timezone.now()
+    rotation_interval = serializer.validated_data.get('rotation_interval', 10)
     
     try:
         class_obj = Class.objects.get(id=class_id, teacher=user)
@@ -437,6 +438,7 @@ def create_session(request):
     
     import random
     import string
+    import secrets
     
     instruction_card = None
     if class_type == 'pattern':
@@ -446,6 +448,8 @@ def create_session(request):
         pattern_code = None
         shape_combo = None
     
+    totp_secret = secrets.token_hex(16)
+
     # Create QR code data (JSON string)
     qr_data = {
         'session_id': str(session_uuid),
@@ -472,6 +476,8 @@ def create_session(request):
         end_time=end_time,
         qr_code_data=json.dumps(qr_data),
         class_type=class_type,
+        totp_secret=totp_secret,
+        rotation_interval=rotation_interval,
 
         pattern_code=pattern_code,
         instruction_card=instruction_card,
@@ -584,6 +590,29 @@ def get_session_details(request, session_id):
     })
 
 
+import hashlib
+
+def calculate_totp_and_captcha(session_id, totp_secret, rotation_interval, timestamp, start_timestamp=0):
+    window = int((timestamp - start_timestamp) / rotation_interval)
+    
+    # Token
+    token_input = f"{session_id}-{totp_secret}-{window}"
+    token = hashlib.sha256(token_input.encode('utf-8')).hexdigest()[:16]
+    
+    # Captcha
+    captcha_input = f"{session_id}-{totp_secret}-{window}-captcha"
+    captcha_hash = hashlib.sha256(captcha_input.encode('utf-8')).hexdigest()
+    
+    chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    num = int(captcha_hash[:8], 16)
+    captcha = ""
+    for i in range(4):
+        captcha += chars[num % len(chars)]
+        num = num // len(chars)
+        
+    return token, captcha
+
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def mark_attendance(request, session_id):
@@ -632,6 +661,42 @@ def mark_attendance(request, session_id):
             {'error': f'You are not enrolled in {session.class_obj.class_code}'},
             status=status.HTTP_403_FORBIDDEN
         )
+    
+    # Validate rotating QR and captcha if it's a QR session
+    if session.class_type == 'qr':
+        token = request.data.get('token')
+        captcha = request.data.get('captcha')
+        
+        if not token or not captcha:
+            return Response(
+                {'error': 'QR code token and captcha are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        target_time = scan_time or timezone.now()
+        target_timestamp = target_time.timestamp()
+        start_timestamp = session.start_time.timestamp()
+        
+        valid = False
+        # Allow current, previous, and next windows (total 3 windows to be highly tolerant of drift)
+        for offset in [0, -1, 1]:
+            test_timestamp = target_timestamp + (offset * (session.rotation_interval or 10))
+            expected_token, expected_captcha = calculate_totp_and_captcha(
+                str(session.session_id),
+                session.totp_secret or '',
+                session.rotation_interval or 10,
+                test_timestamp,
+                start_timestamp
+            )
+            if token == expected_token and captcha.upper() == expected_captcha.upper():
+                valid = True
+                break
+                
+        if not valid:
+            return Response(
+                {'error': 'Invalid or expired QR code or captcha'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
     
     # Check 24-hour expiration for offline syncs
     if is_offline_sync:

@@ -271,30 +271,68 @@ class _QRScannerScreenState extends State<QRScannerScreen>
       final isOfflineSession = data['is_offline'] == true;
       final isOffline = isNetworkOffline || isOfflineSession;
 
-      if (isOffline) {
-        final timestamp = DateTime.now().toUtc().toIso8601String();
-        await SyncService().enqueueQRScan(sessionId, timestamp);
+      final token = data['token'];
 
-        setState(() {
-          hasScanned = true;
-          isProcessing = false;
-        });
+      if (token != null) {
+        if (mounted) {
+          final captcha = await _showCaptchaDialog();
+          if (captcha == null) {
+            setState(() => isProcessing = false);
+            return;
+          }
+          
+          if (isOffline) {
+            final timestamp = DateTime.now().toUtc().toIso8601String();
+            await SyncService().enqueueQRScan(sessionId, timestamp, qrToken: token, captcha: captcha);
+            setState(() {
+              hasScanned = true;
+              isProcessing = false;
+            });
+            _showSuccessDialog(
+              'Offline Mode: QR scan saved locally. It will sync automatically when internet is restored.',
+            );
+            return;
+          }
+          
+          final result = await _attendanceService.markAttendance(
+            sessionId,
+            qrToken: token,
+            captcha: captcha,
+          );
+          
+          if (mounted) {
+            if (result['success']) {
+              setState(() => hasScanned = true);
+              _showSuccessDialog(result['message']);
+            } else {
+              _showError(result['message']);
+              setState(() => isProcessing = false);
+            }
+          }
+        }
+      } else {
+        if (isOffline) {
+          final timestamp = DateTime.now().toUtc().toIso8601String();
+          await SyncService().enqueueQRScan(sessionId, timestamp);
+          setState(() {
+            hasScanned = true;
+            isProcessing = false;
+          });
+          _showSuccessDialog(
+            'Offline Mode: QR scan saved locally. It will sync automatically when internet is restored.',
+          );
+          return;
+        }
 
-        _showSuccessDialog(
-          'Offline Mode: QR scan saved locally. It will sync automatically when internet is restored.',
-        );
-        return;
-      }
-
-      final result = await _attendanceService.markAttendance(sessionId);
-
-      if (mounted) {
-        if (result['success']) {
-          setState(() => hasScanned = true);
-          _showSuccessDialog(result['message']);
-        } else {
-          _showError(result['message']);
-          setState(() => isProcessing = false);
+        final result = await _attendanceService.markAttendance(sessionId);
+        if (mounted) {
+          if (result['success']) {
+            setState(() => hasScanned = true);
+            _showSuccessDialog(result['message']);
+          } else {
+            _showError(result['message']);
+            setState(() => isProcessing = false);
+          }
         }
       }
     } catch (e) {
@@ -807,6 +845,69 @@ class _QRScannerScreenState extends State<QRScannerScreen>
           ),
         ),
       ),
+    );
+  }
+
+  Future<String?> _showCaptchaDialog() async {
+    final TextEditingController captchaController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Enter Captcha Code'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Please enter the 4-character code shown on the screen to verify your presence.',
+                  style: TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: captchaController,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.characters,
+                  maxLength: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Captcha Code',
+                    hintText: 'ABCD',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (val) {
+                    if (val == null || val.trim().length != 4) {
+                      return 'Code must be exactly 4 characters';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, null),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (formKey.currentState!.validate()) {
+                  Navigator.pop(context, captchaController.text.trim().toUpperCase());
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1E5B53),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Submit'),
+            ),
+          ],
+        );
+      },
     );
   }
 }

@@ -41,14 +41,13 @@ class ApiConfig {
 
   // Headers
   static Map<String, String> get headers => {
-    'Bypass-Tunnel-Reminder':
-        'true', // Required to bypass Localtunnel warning page
+    // 'Bypass-Tunnel-Reminder':'true', // Required to bypass Localtunnel warning page
   };
 
   static Map<String, String> authHeaders(String? token) => {
     'Authorization': 'Bearer ${token ?? ""}',
-    'Bypass-Tunnel-Reminder':
-        'true', // Required to bypass Localtunnel warning page
+    // 'Bypass-Tunnel-Reminder':
+    //     'true', // Required to bypass Localtunnel warning page
   };
 }
 // import 'package:flutter/foundation.dart';
