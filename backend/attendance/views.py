@@ -1968,3 +1968,123 @@ def announcements_list_create(request):
             
         serializer = AnnouncementSerializer(announcements, many=True)
         return Response(serializer.data)
+
+
+@api_view(['PUT', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def announcement_detail(request, pk):
+    try:
+        announcement = Announcement.objects.get(pk=pk)
+    except Announcement.DoesNotExist:
+        return Response({'error': 'Announcement not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+    if announcement.sender != request.user:
+        return Response({'error': 'You do not have permission to modify this announcement'}, status=status.HTTP_403_FORBIDDEN)
+        
+    if request.method == 'PUT':
+        serializer = AnnouncementSerializer(announcement, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    elif request.method == 'DELETE':
+        announcement.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+import os
+import base64
+import numpy as np
+import cv2
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.conf import settings
+
+FACE_DATA_DIR = os.path.join(settings.BASE_DIR, 'face_data')
+os.makedirs(FACE_DATA_DIR, exist_ok=True)
+
+try:
+    from insightface.app import FaceAnalysis
+    # Initialize the app once at startup
+    face_app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider'])
+    face_app.prepare(ctx_id=0, det_size=(160, 160))
+except Exception as e:
+    face_app = None
+    print("InsightFace init failed:", e)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def register_face(request):
+    try:
+        base64_img = request.data.get('image')
+        if not base64_img:
+            return Response({'error': 'No image provided'}, status=400)
+            
+        # Decode base64
+        img_data = base64.b64decode(base64_img)
+        np_arr = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        if face_app is None:
+            return Response({'error': 'InsightFace AI model failed to load on the server. Please restart Django.'}, status=500)
+            
+        faces = face_app.get(img)
+        if len(faces) == 0:
+            return Response({'error': 'No face detected in the image.'}, status=400)
+            
+        embedding = faces[0].embedding
+        user_id = request.user.id
+        
+        # Save to disk
+        file_path = os.path.join(FACE_DATA_DIR, f"{user_id}.npy")
+        np.save(file_path, embedding)
+        
+        return Response({'success': True, 'message': 'Face registered successfully!'})
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_face_auth(request):
+    try:
+        base64_img = request.data.get('image')
+        if not base64_img:
+            return Response({'error': 'No image provided'}, status=400)
+            
+        # Decode base64
+        img_data = base64.b64decode(base64_img)
+        np_arr = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        if face_app is None:
+            return Response({'error': 'InsightFace AI model failed to load on the server. Please restart Django.'}, status=500)
+            
+        faces = face_app.get(img)
+        if len(faces) == 0:
+            return Response({'error': 'No face detected.'}, status=400)
+            
+        # Ensure detection confidence is adequate (insightface provides det_score)
+        if hasattr(faces[0], 'det_score') and faces[0].det_score < 0.6:
+            return Response({'error': 'Face detection confidence too low.'}, status=400)
+
+        live_embedding = faces[0].embedding
+        user_id = request.user.id
+
+        file_path = os.path.join(FACE_DATA_DIR, f"{user_id}.npy")
+        if not os.path.exists(file_path):
+            return Response({'error': 'No registered face found.'}, status=404)
+
+        saved_embedding = np.load(file_path)
+
+        # Calculate Cosine Similarity (already normalized)
+        similarity = np.dot(live_embedding, saved_embedding) / (np.linalg.norm(live_embedding) * np.linalg.norm(saved_embedding))
+
+        print(f"Face Similarity Score: {similarity}", flush=True)
+
+        # Balanced threshold to reduce false positives while allowing genuine matches
+        is_match = bool(similarity > 0.75)
+
+        return Response({'success': is_match, 'similarity': float(similarity)})
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)

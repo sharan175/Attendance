@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/profile_service.dart';
 import '../../services/auth_service.dart';
+import 'face_verification_screen.dart';
 import '../../widgets/student_drawer.dart';
 
 class StudentProfileScreen extends StatefulWidget {
@@ -396,6 +397,20 @@ class _StudentProfileScreenState extends State<StudentProfileScreen>
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
+                                    _profileActionButton(
+                                      Icons.face_retouching_natural,
+                                      "Face ID",
+                                      Colors.blueAccent,
+                                      () async {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => const FaceVerificationScreen(isRegistration: true),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(width: 20),
                                     _profileActionButton(
                                       Icons.logout,
                                       "Logout",
